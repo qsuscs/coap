@@ -1,13 +1,25 @@
 package main
 
 import (
+	"encoding/binary"
+	"fmt"
+	"io"
 	"log"
 	gonet "net"
+	"strings"
+	"time"
 
+	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/mux"
 	"github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/udp"
-	"io"
+)
+
+const (
+	coiotBase           message.OptionID = 3332 // non critical, save to forward, no cache key
+	coiotGlobalDevid    message.OptionID = 3332
+	coiotStatusValidity message.OptionID = 3412
+	coiotStatusSerial   message.OptionID = 3420
 )
 
 func handleMcast(w mux.ResponseWriter, r *mux.Message) {
@@ -18,8 +30,37 @@ func handleMcast(w mux.ResponseWriter, r *mux.Message) {
 	}
 	b, _ := io.ReadAll(r.Body)
 
-	log.Printf("Got mcast message: path=%q: from %v: %s", path, w.Client().RemoteAddr(),
-		string(b))
+	var sb strings.Builder
+
+	for _, o := range r.Options {
+		switch o.ID {
+		case coiotGlobalDevid:
+			sb.WriteString("Device ID: ")
+			sb.WriteString(string(o.Value))
+			sb.WriteString(", ")
+		case coiotStatusValidity:
+			sb.WriteString("Status validity: ")
+			t := binary.BigEndian.Uint16(o.Value)
+			var tm time.Duration
+			if t&1 == 0 {
+				tm = time.Microsecond * 10 * time.Duration(t)
+			} else {
+				tm = time.Second * 4 * time.Duration(t)
+			}
+			sb.WriteString(tm.String())
+			sb.WriteString(", ")
+		case coiotStatusSerial:
+			sb.WriteString("Status serial: ")
+			s := binary.BigEndian.Uint16(o.Value)
+			sb.WriteString(fmt.Sprint(s))
+			sb.WriteString(", ")
+		}
+	}
+	coiot := sb.String()
+
+	log.Printf("Got mcast message: path=%q, source=%v: %s\n%s",
+		path, w.Client().RemoteAddr(), string(b),
+		coiot[:len(coiot)-2])
 }
 
 func main() {
